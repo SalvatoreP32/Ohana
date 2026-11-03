@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { loadFamily, addPerson, editPerson, removePerson } from "./xmlTools.js";
+import { loadFamily, addPerson, editPerson, removePerson } from "./jsonTools.js";
 
 const app = express();
 app.use(cors());          // frontend can use this
