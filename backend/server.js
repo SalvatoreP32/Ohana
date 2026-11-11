@@ -1,44 +1,52 @@
 import express from "express";
 import cors from "cors";
+import { readFile } from "node:fs/promises";
+import { XMLParser } from "fast-xml-parser";
+import { expressjwt } from "express-jwt";
+import { expressJwtSecret } from "jwks-rsa";
 import { loadFamily, addPerson, editPerson, removePerson } from "./xmlTools.js";
-
+ 
+const parser = new XMLParser({
+  parseTagValue: false,
+  isArray: (_name, path) => path === "admins.admin",
+});
+ 
+async function loadAdmins() {
+  const xml = await readFile(new URL("./Admins.xml", import.meta.url), "utf8");
+  return parser.parse(xml).admins?.admin ?? [];
+}
+ 
+const requireGoogleToken = expressjwt({
+  secret: expressJwtSecret({
+    jwksUri: "https://www.googleapis.com/oauth2/v3/certs",
+    cache: true,
+    rateLimit: true,
+  }),
+  audience: process.env.GOOGLE_CLIENT_ID,
+  issuer: ["https://accounts.google.com", "accounts.google.com"],
+  algorithms: ["RS256"],
+});
+ 
+const requireAdmin = async (req, res, next) => {
+  const admins = await loadAdmins();
+  const admin = admins.find((a) => String(a.googleUserId).trim() === req.auth.sub);
+  if (!admin) return res.sendStatus(403);
+  req.treeNumber = String(admin.treeNumber).trim();
+  next();
+};
+ 
+const api = express.Router();
+api.use(requireGoogleToken, requireAdmin);
+ 
+api.post("/auth/verify", (req, res) => res.json({ treeNumber: req.treeNumber }));
+api.get("/people", async (req, res) => res.json(await loadFamily(req.treeNumber)));
+api.post("/people", async (req, res) => res.status(201).json(await addPerson(req.body, req.treeNumber)));
+api.patch("/people/:id", async (req, res) => res.json(await editPerson(req.params.id, req.body, req.treeNumber)));
+api.delete("/people/:id", async (req, res) => res.json(await removePerson(req.params.id, req.body, req.treeNumber)));
+ 
 const app = express();
-app.use(cors());          // frontend can use this
-app.use(express.json());  
-
-app.get("/api/people", async (_req, res) => {
-  res.json(await loadFamily());
-});
-
-app.post("/api/people", async (req, res) => {
-  res.status(201).json(await addPerson(req.body));
-});
-
-app.patch("/api/people/:id", async (req, res) => {
-  res.json(await editPerson(req.params.id, req.body));
-});
-
-app.delete("/api/people/:id", async (req, res) => {
-  res.json(await removePerson(req.params.id));
-});
-
-app.use((err, _req, res, _next) => {
-  res.status(500).json({ error: err.message });
-});
-
+app.use(cors());
+app.use(express.json());
+app.use("/api", api);
 app.listen(3000);
-
-//Load People GET /api/people JSON returned by loadFamily()
-//Add Person POST /api/people JSON body with person data returned by addPerson()
-//Edit Person PATCH /api/people/:id JSON body with changes returned by editPerson()
-//Remove Person DELETE /api/people/:id returned by removePerson()
-
-//can connect to http://localhost:3000/api/people
-
-//Invoke-RestMethod -Uri http://localhost:3000/api/people -Method Post -ContentType "application/json" -Body '{"firstName":"Sam","lastName":"Example","birthDate":"01/15/1990","bio":"Added from terminal"}'
-
-//Invoke-RestMethod -Uri "http://localhost:3000/api/people/1" -Method Delete
-
-//Invoke-RestMethod http://localhost:3000/api/people
-
-//Invoke-RestMethod -Uri "http://localhost:3000/api/people/1" -Method Patch -ContentType "application/json" -Body '{"firstName":"Sam","lastName":"Example","bio":"Updated bio"}'
+ 
